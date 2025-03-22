@@ -346,8 +346,10 @@ reparent(struct proc *p)
 void
 exit(int status)
 {
+  char exit_msg[32];
   struct proc *p = myproc();
-
+  argstr(1, exit_msg, 32);
+  *p->exit_msg = *exit_msg;
   if(p == initproc)
     panic("init exiting");
 
@@ -390,6 +392,8 @@ exit(int status)
 int
 wait(uint64 addr)
 {
+  char exit_msg_buff[sizeof(uint64)];
+  argstr(1, exit_msg_buff, sizeof(exit_msg_buff));
   struct proc *pp;
   int havekids, pid;
   struct proc *p = myproc();
@@ -414,6 +418,9 @@ wait(uint64 addr)
             release(&wait_lock);
             return -1;
           }
+          
+          copyout(p->pagetable, (uint64)exit_msg_buff, pp->exit_msg, sizeof(pp->exit_msg));
+          
           freeproc(pp);
           release(&pp->lock);
           release(&wait_lock);
