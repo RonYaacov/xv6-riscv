@@ -4,4 +4,5 @@
         "riscv.h": "c",
         "defs.h": "c",
     },
+    "makefile.configureOnOpen": true,
 }
