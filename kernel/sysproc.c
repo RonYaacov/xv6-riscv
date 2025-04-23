@@ -11,7 +11,9 @@ sys_exit(void)
 {
   int n;
   argint(0, &n);
-  exit(n,"");
+  char kar_exit_msg[32]; 
+  argstr(1, kar_exit_msg, 32);
+  exit(n, kar_exit_msg);
   return 0;  // not reached
 }
 
@@ -28,11 +30,33 @@ sys_fork(void)
 }
 
 uint64
+sys_forkn(void)
+{
+  int n;
+  argint(0, &n);
+  uint64 pids_addr;
+  argaddr(1, &pids_addr);
+  return forkn(n, pids_addr);
+}
+
+uint64
 sys_wait(void)
 {
   uint64 p;
   argaddr(0, &p);
-  return wait(p,"");
+  uint64 kar_exit_msg_addr;
+  argaddr(1, &kar_exit_msg_addr);
+  return wait(p, kar_exit_msg_addr);
+}
+
+uint64
+sys_waitall(void)
+{
+  uint64 n;
+  argaddr(0, &n);
+  uint64 statuses;
+  argaddr(1, &statuses);
+  return waitall(n, statuses);
 }
 
 uint64

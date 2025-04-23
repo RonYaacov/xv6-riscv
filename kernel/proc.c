@@ -344,12 +344,9 @@ reparent(struct proc *p)
 // An exited process remains in the zombie state
 // until its parent calls wait().
 void
-exit(int status, char *exit_msg)
+exit(int status, char *kar_exit_msg)
 {
-  char kar_exit_msg[32]; 
   struct proc *p = myproc();
-  argstr(1, kar_exit_msg, 32);
-  safestrcpy(p->exit_msg, kar_exit_msg, sizeof(p->exit_msg));
   if(p == initproc)
     panic("init exiting");
 
@@ -376,6 +373,7 @@ exit(int status, char *exit_msg)
   wakeup(p->parent);
   
   acquire(&p->lock);
+  safestrcpy(p->exit_msg, kar_exit_msg, sizeof(p->exit_msg));
 
   p->xstate = status;
   p->state = ZOMBIE;
@@ -390,15 +388,12 @@ exit(int status, char *exit_msg)
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
-wait(uint64 addr, char *kar_exit_msg_buffer)
+wait(uint64 addr, uint64 kar_exit_msg_addr)
 {
   struct proc *pp;
   int havekids, pid;
   struct proc *p = myproc();
-  uint64 kar_exit_msg_addr;
-  argaddr(1, &kar_exit_msg_addr);
-
-
+  
   acquire(&wait_lock);
 
   for(;;){
@@ -688,3 +683,162 @@ procdump(void)
     printf("\n");
   }
 }
+
+struct proc* get_proc_by_pid(int pid) {
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock); // Acquire the lock to safely access the process
+    if (p->pid == pid && p->state != UNUSED) {
+      release(&p->lock); // Release the lock before returning
+      return p;
+    }
+    release(&p->lock);
+  }
+
+  return 0; // Return 0 if no process with the given pid is found
+}
+
+
+// if failed, release all the processes created so far
+int
+release_all(int n, uint64 pids_addr){
+  for(int i = 0; i < n; i++){
+    int pid;
+    if (copyin(myproc()->pagetable, (char *)&pid, pids_addr + (i) * sizeof(int), sizeof(int)) < 0) {
+      return -1; // Failed to copy pid from user space
+    }
+    struct proc *p = get_proc_by_pid(pid);
+    freeproc(p);
+    release(&p->lock);
+  }
+  return 0;
+  
+}
+
+int
+our_fork(int n, uint64 pids_addr){
+
+  int i, pid;
+  struct proc *np;
+  struct proc *p = myproc();
+
+  // Allocate process.
+  if((np = allocproc()) == 0){
+    return -1;
+  }
+
+  // Copy user memory from parent to child.
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  np->sz = p->sz;
+  
+  // copy saved user registers.
+  *(np->trapframe) = *(p->trapframe);
+
+  // Cause fork to return 0 in the child.
+  np->trapframe->a0 = 0;
+
+  // increment reference counts on open file descriptors.
+  for(i = 0; i < NOFILE; i++)
+  if(p->ofile[i])
+  np->ofile[i] = filedup(p->ofile[i]);
+  np->cwd = idup(p->cwd);
+  
+  safestrcpy(np->name, p->name, sizeof(p->name));
+
+  pid = np->pid;
+  
+  release(&np->lock);
+  
+  acquire(&wait_lock);
+  np->parent = p;
+  release(&wait_lock);
+
+  acquire(&np->lock);
+  np->state = SLEEPING;
+  if(copyout(p->pagetable, pids_addr + (n - 1) * sizeof(int), (char *)&pid, sizeof(int)) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  release(&np->lock);
+
+  return n;
+}
+
+
+int
+forkn(int n, uint64 pids_addr){
+
+  for(int i = 0; i < n; i++){
+
+    if(our_fork(i+1, pids_addr) < 0){
+      if(release_all(i, pids_addr) < 0){
+        return -1; // not implemented
+      }
+      return -1; 
+    }  
+  }
+  
+  for (int i = 0; i < n; i++) {
+    int pid;
+    if (copyin(myproc()->pagetable, (char *)&pid, pids_addr + (i) * sizeof(int), sizeof(int)) < 0) {
+      return -1; // Failed to copy pid from user space
+    }
+    struct proc *p = get_proc_by_pid(pid);
+    acquire(&p->lock);
+    if (p->state == SLEEPING) {
+      p->state = RUNNABLE;
+    }
+    release(&p->lock);
+  }
+  return 0; 
+}
+int
+waitall(uint64 n, uint64 statuses){
+  int nn;
+  if (copyin(myproc()->pagetable, (char *)&nn, n, sizeof(int)) < 0) {
+    return -1; // Failed to copy nn from user space
+  }
+  
+  int count = 0;
+  struct proc *p;
+  struct proc *pp;
+  pp = myproc();
+  int found = 0;
+  while(1){
+    yield(); // Give up CPU to allow other processes to run
+    found = 0;
+    for (p = proc; p < &proc[NPROC]; p++) {
+      
+      
+      acquire(&p->lock);
+      if (p->state == ZOMBIE && p->parent == pp) {
+        found = 1;
+        count++;
+        if (copyout(myproc()->pagetable, statuses + count * sizeof(int), (char *)&p->xstate, sizeof(int)) < 0) {
+          release(&p->lock);
+          return -1; // Failed to copy status to user space
+        }
+        if(copyout(myproc()->pagetable, n, (char *)&count, sizeof(int)) < 0) {
+          release(&p->lock);
+          return -1; // Failed to copy exit message to user space
+        }
+        freeproc(p);
+      }
+      release(&p->lock);
+      if (killed(myproc())) {
+        return -1; // Process was killed
+      }
+    }
+    if (found == 0) {
+      break; // No more zombie processes found
+    }
+  }
+  
+  return 0;
+}
+

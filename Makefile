@@ -117,6 +117,7 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 
 UPROGS=\
 	$U/_goodbye\
+	$U/_bigarray\
 	$U/_memsize_test\
 	$U/_helloworld\
 	$U/_cat\
