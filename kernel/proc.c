@@ -797,13 +797,19 @@ forkn(int n, uint64 pids_addr){
   }
   return 0; 
 }
+
+void
+reset_if_failed(uint64 n, uint64 statuses,int count){
+  int zero = 0;
+  copyout(myproc()->pagetable, n, (char *)&zero, sizeof(int));
+  for(int i = 1; i < count+1; i++){
+    copyout(myproc()->pagetable, statuses + i * sizeof(int), (char *)&zero, sizeof(int));
+  }
+
+}
+
 int
 waitall(uint64 n, uint64 statuses){
-  int nn;
-  if (copyin(myproc()->pagetable, (char *)&nn, n, sizeof(int)) < 0) {
-    return -1; // Failed to copy nn from user space
-  }
-  
   int count = 0;
   struct proc *p;
   struct proc *pp;
@@ -816,14 +822,21 @@ waitall(uint64 n, uint64 statuses){
       
       
       acquire(&p->lock);
-      if (p->state == ZOMBIE && p->parent == pp) {
+      if (p->parent == pp) {
         found = 1;
+        if(p->state != ZOMBIE){
+          release(&p->lock);
+          continue;
+        }
         count++;
+        
         if (copyout(myproc()->pagetable, statuses + count * sizeof(int), (char *)&p->xstate, sizeof(int)) < 0) {
+          reset_if_failed(n, statuses, count);
           release(&p->lock);
           return -1; // Failed to copy status to user space
         }
         if(copyout(myproc()->pagetable, n, (char *)&count, sizeof(int)) < 0) {
+          reset_if_failed(n, statuses, count);
           release(&p->lock);
           return -1; // Failed to copy exit message to user space
         }
@@ -831,14 +844,15 @@ waitall(uint64 n, uint64 statuses){
       }
       release(&p->lock);
       if (killed(myproc())) {
+        reset_if_failed(n, statuses, count);
         return -1; // Process was killed
       }
     }
     if (found == 0) {
+      
       break; // No more zombie processes found
     }
   }
   
   return 0;
 }
-

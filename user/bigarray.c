@@ -19,7 +19,7 @@ int calc_total_sum(int *array, int n){
 }
 
 int main(){
-    int n = 8;
+    int n = 4;
     int pids[n];
 
     int forkn_status_code = forkn(n, pids);
